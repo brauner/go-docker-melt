@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -14,8 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"github.com/brauner/docker-melt/tarutils"
 	"sync"
+	"github.com/brauner/docker-go-melt/tarutils"
 )
 
 type genericConfig struct {
@@ -553,23 +552,12 @@ func main() {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		f, err := os.Create(l)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		defer f.Close()
-		hash := sha256.New()
-		mw := io.MultiWriter(hash, f)
-		w := tar.NewWriter(mw)
-		defer w.Close()
 		layer := filepath.Join(tmpFolder, key[:len(key)- /* .tar */ 4])
-		err = tarutils.TarDir(w, layer, layer)
+		checksum, err := tarutils.CreateTarHash(layer, layer)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		checksum := hash.Sum(nil)
 		diffID[key] = "sha256:" + hex.EncodeToString(checksum)
 		// Remove untared layer folder.
 		if err := os.RemoveAll(layer); err != nil {
@@ -598,15 +586,7 @@ func main() {
 		}
 	}
 
-	f, err := os.Create(imageOut)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	defer f.Close()
-	w := tar.NewWriter(f)
-	defer w.Close()
-	err = tarutils.TarDir(w, tmpFolder, tmpFolder)
+	err := tarutils.CreateTar(tmpFolder, tmpFolder)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
