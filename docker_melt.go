@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -309,6 +310,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	log.SetFlags(log.Lshortfile)
+
 	untar := untarCmd(image, tmpFolder)
 	if err := untar.Run(); err != nil {
 		fmt.Println(err)
@@ -443,32 +446,27 @@ func main() {
 	for i := 0; i < len(manifest.Manifest); i++ {
 		manfst := &manifest.Manifest[i]
 		if manfst.config == nil {
-			fmt.Println("Corrupt image configuration file.")
-			os.Exit(1)
+			log.Fatalln("Corrupt image configuration file.")
 		}
 
 		rootLayer = ""
 		oldHist, err := json.Marshal(manfst.config.History)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 
 		if manfst.config.Rootfs == nil {
-			fmt.Println("Corrupt image configuration file.")
-			os.Exit(1)
+			log.Fatalln("Corrupt image configuration file.")
 		}
 		oldRootfs, err := json.Marshal(manfst.config.Rootfs)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 		manfst.config.Rootfs.rawJSON = oldRootfs
 
 		oldLayers, err := json.Marshal(manfst.Layers)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 
 		for j := 0; j < len(manfst.Layers); j++ {
@@ -491,20 +489,17 @@ func main() {
 				cmd := rsyncLayer(meltFrom, meltInto)
 				fmt.Println(meltFrom, meltInto)
 				if err := cmd.Run(); err != nil {
-					fmt.Println(err)
-					os.Exit(1)
+					log.Fatal(err)
 				}
 				// Delete whiteout files in the current layer
 				// and the corresponding file/dir in the
 				// rootLayer.
 				if err := removeWhiteouts(meltFrom, meltInto, 20); err != io.EOF {
-					fmt.Println(err)
-					os.Exit(1)
+					log.Fatal(err)
 				}
 				// Delete melted layers.
 				if err := os.RemoveAll(filepath.Join(tmpFolder, layerHash[:len(layerHash)- /* /layer */ 6])); err != nil {
-					fmt.Println(err)
-					os.Exit(1)
+					log.Fatal(err)
 				}
 			}
 
@@ -524,19 +519,16 @@ func main() {
 		}
 		err = manfst.config.updateHistory(oldHist)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 
 		err = manifest.updateLayers(*manfst, oldLayers)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
 	}
 	if err := ioutil.WriteFile(filepath.Join(tmpFolder, "manifest.json"), manifest.rawJSON, 0666); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	// TODO: This is a fast and dirty hack to get a working version. This
@@ -548,47 +540,45 @@ func main() {
 		if _, err := os.Stat(l); os.IsNotExist(err) {
 			continue
 		}
+
 		if err := os.Remove(l); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
-		layer := filepath.Join(tmpFolder, key[:len(key)- /* .tar */ 4])
-		checksum, err := tarutils.CreateTarHash(layer, layer)
+
+		dir := filepath.Join(tmpFolder, key[:len(key)- /* .tar */ 4])
+		checksum, err := tarutils.CreateTarHash(l, dir, dir)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
+
 		diffID[key] = "sha256:" + hex.EncodeToString(checksum)
-		// Remove untared layer folder.
-		if err := os.RemoveAll(layer); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+
+		if err := os.RemoveAll(dir); err != nil {
+			log.Fatal(err)
 		}
 	}
 
-	for _, val := range manifest.Manifest {
-		for i, lay := range val.Layers {
-			val.config.Rootfs.DiffIds[i] = diffID[lay]
+	for i := 0; i < len(manifest.Manifest); i++ {
+		m := &manifest.Manifest[i]
+		for j := 0; j < len(m.Layers); j++ {
+			l := &m.Layers[j]
+			m.config.Rootfs.DiffIds[j] = diffID[*l]
 		}
-		err := val.config.updateRootfs(val.config.Rootfs.rawJSON)
+		err := m.config.updateRootfs(m.config.Rootfs.rawJSON)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
-		marshConfig, err := json.Marshal(val.config)
+		marshConfig, err := json.Marshal(m.config)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Fatal(err)
 		}
-		if err := ioutil.WriteFile(filepath.Join(tmpFolder, val.ConfigHash), marshConfig, 0666); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		if err := ioutil.WriteFile(filepath.Join(tmpFolder, m.ConfigHash), marshConfig, 0666); err != nil {
+			log.Fatal(err)
 		}
 	}
 
-	err := tarutils.CreateTar(tmpFolder, tmpFolder)
+	err := tarutils.CreateTar(imageOut, tmpFolder, tmpFolder)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 }
