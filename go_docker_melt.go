@@ -410,7 +410,7 @@ func main() {
 			for cmd := range tasks {
 				err = cmd.Run()
 				if err != nil {
-					fmt.Println(err)
+					log.Println(err)
 				}
 			}
 			wg.Done()
@@ -434,7 +434,7 @@ func main() {
 			}
 			err = os.Remove(filepath.Join(tmpDir, layerHash, curName))
 			if err != nil {
-				fmt.Println(err)
+				log.Println(err)
 			}
 		}
 		// Unpacking everything under sha-hash/layer
@@ -495,7 +495,7 @@ func main() {
 			if err == nil {
 				// rsync everything except whiteout files.
 				cmd := rsyncLayer(meltFrom, meltInto)
-				fmt.Println(meltFrom, meltInto)
+				// log.Println(meltFrom, meltInto)
 				err = cmd.Run()
 				if err != nil {
 					log.Fatal(err)
