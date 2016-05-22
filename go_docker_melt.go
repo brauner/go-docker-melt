@@ -267,7 +267,7 @@ func removeWhiteouts(oldpath string, newpath string, nentries int) error {
 					return err
 				}
 				if wh {
-					if err := os.RemoveAll(filepath.Join(newpath, cur[/* .wh. */ 4:])); err != nil {
+					if err := os.RemoveAll(filepath.Join(newpath, cur[ /* .wh. */ 4:])); err != nil {
 						return err
 					}
 				}
@@ -543,10 +543,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// TODO: This is a fast and dirty hack to get a working version. This
-	// should (a) be parallelized, (b) to rethought whether usage of a
-	// diffID map can be avoided.
-	var diffID = make(map[string]string, len(allLayers))
+	// TODO: Rethink whether usage of a diffID map can be avoided.
+	var diffIDMutex = struct {
+		sync.Mutex
+		diffID map[string]string
+	}{diffID: make(map[string]string, len(allLayers))}
+	sem := make(chan bool, maxWorkers)
 	for key := range allLayers {
 		l := filepath.Join(tmpDir, key)
 		_, err = os.Stat(l)
@@ -560,24 +562,33 @@ func main() {
 		}
 
 		dir := filepath.Join(tmpDir, key[:len(key)- /* .tar */ 4])
-		checksum, err := tarutils.CreateTarHash(l, dir, dir)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		diffID[key] = "sha256:" + hex.EncodeToString(checksum)
-
-		err = os.RemoveAll(dir)
-		if err != nil {
-			log.Fatal(err)
-		}
+		sem <- true
+		go func(l string, dir string, key string) {
+			defer func() { <-sem }()
+			checksum, err := tarutils.CreateTarHash(l, dir, dir)
+			if err != nil {
+				log.Fatal(err)
+			}
+			diffIDMutex.Lock()
+			diffIDMutex.diffID[key] = "sha256:" + hex.EncodeToString(checksum)
+			diffIDMutex.Unlock()
+			err = os.RemoveAll(dir)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}(l, dir, key)
 	}
+
+	for i := 0; i < cap(sem); i++ {
+		sem <- true
+	}
+	close(sem)
 
 	for i := 0; i < len(manifest.Manifest); i++ {
 		m := &manifest.Manifest[i]
 		for j := 0; j < len(m.Layers); j++ {
 			l := &m.Layers[j]
-			m.config.Rootfs.DiffIds[j] = diffID[*l]
+			m.config.Rootfs.DiffIds[j] = diffIDMutex.diffID[*l]
 		}
 		err = m.config.updateRootfs(m.config.Rootfs.rawJSON)
 		if err != nil {
