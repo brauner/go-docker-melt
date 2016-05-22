@@ -15,7 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"sync"
-	"github.com/brauner/docker-go-melt/tarutils"
+	"github.com/brauner/go-docker-melt/tarutils"
 )
 
 type genericConfig struct {
