@@ -290,12 +290,12 @@ func IsEmptyDir(dir string) error {
 
 var image string
 var imageOut string
-var tmpFolder string
+var tmpDir string
 
 func init() {
 	flag.StringVar(&image, "i", "", "Tarball of the image to melt.")
 	flag.StringVar(&imageOut, "o", "", "Name of output tarball.")
-	flag.StringVar(&tmpFolder, "t", "", "Directory to hold temporary data.")
+	flag.StringVar(&tmpDir, "t", "", "Directory to hold temporary data.")
 }
 
 func Usage() {
@@ -305,23 +305,28 @@ func Usage() {
 
 func main() {
 	flag.Parse()
-	if image == "" || tmpFolder == "" || imageOut == "" {
+	if image == "" || imageOut == "" {
 		Usage()
 		os.Exit(1)
 	}
 
 	log.SetFlags(log.Lshortfile)
 
-	untar := untarCmd(image, tmpFolder)
-	if err := untar.Run(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	tmpDir, err := ioutil.TempDir(tmpDir, "go-docker-melt_")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	untar := untarCmd(image, tmpDir)
+	err = untar.Run()
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	var manifest RawManifest
-	if err := manifest.UnmarshalJSON(filepath.Join(tmpFolder, "manifest.json")); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	err = manifest.UnmarshalJSON(filepath.Join(tmpDir, "manifest.json"))
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	numManifest := len(manifest.Manifest)
@@ -333,9 +338,9 @@ func main() {
 		if conf == "" {
 			continue
 		}
-		if err := configs[i].UnmarshalJSON(filepath.Join(tmpFolder, conf)); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		err = configs[i].UnmarshalJSON(filepath.Join(tmpDir, conf))
+		if err != nil {
+			log.Fatal(err)
 		}
 		manifest.Manifest[i].config = &configs[i]
 	}
@@ -403,7 +408,8 @@ func main() {
 		wg.Add(1)
 		go func() {
 			for cmd := range tasks {
-				if err := cmd.Run(); err != nil {
+				err = cmd.Run()
+				if err != nil {
 					fmt.Println(err)
 				}
 			}
@@ -415,7 +421,7 @@ func main() {
 		// We need to record the pure layerHash somewhere to avoid
 		// duplicating the work. That's for future tweaking.
 		layerHash := key[:len(key)- /* /layer.tar */ 10]
-		direntries, err := ioutil.ReadDir(filepath.Join(tmpFolder, layerHash))
+		direntries, err := ioutil.ReadDir(filepath.Join(tmpDir, layerHash))
 		if err != nil {
 			os.Exit(1)
 		}
@@ -426,17 +432,18 @@ func main() {
 			if curName == "layer.tar" {
 				continue
 			}
-			if err := os.Remove(filepath.Join(tmpFolder, layerHash, curName)); err != nil {
+			err = os.Remove(filepath.Join(tmpDir, layerHash, curName))
+			if err != nil {
 				fmt.Println(err)
 			}
 		}
 		// Unpacking everything under sha-hash/layer
 		tmptar := key[:len(key)- /* .tar */ 4]
-		if err := os.Mkdir(filepath.Join(tmpFolder, tmptar), 0755); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		err = os.Mkdir(filepath.Join(tmpDir, tmptar), 0755)
+		if err != nil {
+			log.Fatal(err)
 		}
-		tasks <- untarCmd(filepath.Join(tmpFolder, key), filepath.Join(tmpFolder, tmptar))
+		tasks <- untarCmd(filepath.Join(tmpDir, key), filepath.Join(tmpDir, tmptar))
 	}
 	close(tasks)
 	wg.Wait()
@@ -480,25 +487,29 @@ func main() {
 			// This layer will be melted into the current chosen
 			// rootLayer.
 			layerHash := (*layer)[:len(*layer)- /* .tar */ 4]
-			meltFrom := filepath.Join(tmpFolder, layerHash)
-			meltInto := filepath.Join(tmpFolder, rootLayer)
+			meltFrom := filepath.Join(tmpDir, layerHash)
+			meltInto := filepath.Join(tmpDir, rootLayer)
 
 			// melt
-			if _, err := os.Stat(meltFrom); err == nil {
+			_, err := os.Stat(meltFrom)
+			if err == nil {
 				// rsync everything except whiteout files.
 				cmd := rsyncLayer(meltFrom, meltInto)
 				fmt.Println(meltFrom, meltInto)
-				if err := cmd.Run(); err != nil {
+				err = cmd.Run()
+				if err != nil {
 					log.Fatal(err)
 				}
 				// Delete whiteout files in the current layer
 				// and the corresponding file/dir in the
 				// rootLayer.
-				if err := removeWhiteouts(meltFrom, meltInto, 20); err != io.EOF {
+				err = removeWhiteouts(meltFrom, meltInto, 20)
+				if err != io.EOF {
 					log.Fatal(err)
 				}
 				// Delete melted layers.
-				if err := os.RemoveAll(filepath.Join(tmpFolder, layerHash[:len(layerHash)- /* /layer */ 6])); err != nil {
+				err := os.RemoveAll(filepath.Join(tmpDir, layerHash[:len(layerHash)- /* /layer */ 6]))
+				if err != nil {
 					log.Fatal(err)
 				}
 			}
@@ -527,7 +538,8 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	if err := ioutil.WriteFile(filepath.Join(tmpFolder, "manifest.json"), manifest.rawJSON, 0666); err != nil {
+	err = ioutil.WriteFile(filepath.Join(tmpDir, "manifest.json"), manifest.rawJSON, 0666)
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -536,16 +548,18 @@ func main() {
 	// diffID map can be avoided.
 	var diffID = make(map[string]string, len(allLayers))
 	for key := range allLayers {
-		l := filepath.Join(tmpFolder, key)
-		if _, err := os.Stat(l); os.IsNotExist(err) {
+		l := filepath.Join(tmpDir, key)
+		_, err = os.Stat(l)
+		if os.IsNotExist(err) {
 			continue
 		}
 
-		if err := os.Remove(l); err != nil {
+		err = os.Remove(l)
+		if err != nil {
 			log.Fatal(err)
 		}
 
-		dir := filepath.Join(tmpFolder, key[:len(key)- /* .tar */ 4])
+		dir := filepath.Join(tmpDir, key[:len(key)- /* .tar */ 4])
 		checksum, err := tarutils.CreateTarHash(l, dir, dir)
 		if err != nil {
 			log.Fatal(err)
@@ -553,7 +567,8 @@ func main() {
 
 		diffID[key] = "sha256:" + hex.EncodeToString(checksum)
 
-		if err := os.RemoveAll(dir); err != nil {
+		err = os.RemoveAll(dir)
+		if err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -564,7 +579,7 @@ func main() {
 			l := &m.Layers[j]
 			m.config.Rootfs.DiffIds[j] = diffID[*l]
 		}
-		err := m.config.updateRootfs(m.config.Rootfs.rawJSON)
+		err = m.config.updateRootfs(m.config.Rootfs.rawJSON)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -572,13 +587,19 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := ioutil.WriteFile(filepath.Join(tmpFolder, m.ConfigHash), marshConfig, 0666); err != nil {
+		err = ioutil.WriteFile(filepath.Join(tmpDir, m.ConfigHash), marshConfig, 0666)
+		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	err := tarutils.CreateTar(imageOut, tmpFolder, tmpFolder)
+	err = tarutils.CreateTar(imageOut, tmpDir, tmpDir)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	err = os.RemoveAll(tmpDir)
+	if err != nil {
+		log.Println(err)
 	}
 }
