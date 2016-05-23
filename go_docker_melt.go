@@ -65,7 +65,7 @@ type ImageConfig struct {
 	Created         string           `json:"created,omitempty"`
 	DockerVersion   string           `json:"docker_version,omitempty"`
 	RawHistory      *json.RawMessage `json:"history,omitempty"`
-	history         []History
+	history         *[]History
 	OS              string           `json:"os,omitempty"`
 	RawRootfs       *json.RawMessage `json:"rootfs,omitempty"`
 	rootfs          *Rootfs
@@ -101,7 +101,7 @@ func (img *ImageConfig) UnmarshalJSON(file string) error {
 	}
 	img.rawJSON = buf
 
-	if img.RawHistory == nil || img.RawRootfs == nil {
+	if (img.RawHistory == nil) || (img.RawRootfs == nil) {
 		return errors.New("Corrupt image configuration.")
 	}
 
@@ -115,7 +115,7 @@ func (img *ImageConfig) UnmarshalJSON(file string) error {
 		return err
 	}
 
-	if img.rootfs == nil {
+	if (img.history == nil) || (img.rootfs == nil) {
 		return errors.New("Corrupt image configuration.")
 	}
 
@@ -123,7 +123,7 @@ func (img *ImageConfig) UnmarshalJSON(file string) error {
 }
 
 func (img *ImageConfig) updateHistory() error {
-	repl, err := json.Marshal(img.history)
+	repl, err := json.Marshal(*img.history)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func (img *ImageConfig) updateRootfs() error {
 }
 
 func (img *ImageConfig) delHistoryElem(pos int) {
-	img.history = append(img.history[:pos], img.history[pos+1:]...)
+	*img.history = append((*img.history)[:pos], (*img.history)[pos+1:]...)
 }
 
 // The reference for manifests can be found at:
@@ -480,7 +480,7 @@ func main() {
 		}
 
 		rootLayer = ""
-		for j := 0; j < len(manfst.layers); j++ {
+		for j, hist := 0, 0; j < len(manfst.layers); j, hist = j+1, hist+1 {
 			layer := &manfst.layers[j]
 			// Find the first useable rootLayer for this image.
 			if rootLayer == "" && allLayers[*layer] != 2 {
@@ -524,8 +524,14 @@ func main() {
 				rootLayer = ""
 			}
 
+			for ; (*manfst.config.history)[hist].EmptyLayer == true; hist++ {
+				// Keep all history entries that do not
+				// correspond to a layer in the tar archive.
+			}
 			// Delete corresponding history entry for this layer.
-			manfst.config.delHistoryElem(j)
+			manfst.config.delHistoryElem(hist)
+			hist--
+
 			// Delete corresponding diff_ids entry for this layer.
 			manfst.config.rootfs.delRootfsElem(j)
 			// Delete corresponding layer entry.
