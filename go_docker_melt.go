@@ -549,6 +549,7 @@ func main() {
 		diffID map[string]string
 	}{diffID: make(map[string]string, len(allLayers))}
 	sem := make(chan bool, maxWorkers)
+	errChan := make(chan error, maxWorkers)
 	for key := range allLayers {
 		l := filepath.Join(tmpDir, key)
 		_, err = os.Stat(l)
@@ -564,9 +565,10 @@ func main() {
 		dir := filepath.Join(tmpDir, key[:len(key)- /* .tar */ 4])
 		sem <- true
 		go func(l string, dir string, key string) {
-			defer func() { <-sem }()
+			defer func() { <- sem }()
 			checksum, err := tarutils.CreateTarHash(l, dir, dir)
 			if err != nil {
+				errChan <- err
 				log.Fatal(err)
 			}
 			diffIDMutex.Lock()
@@ -574,13 +576,19 @@ func main() {
 			diffIDMutex.Unlock()
 			err = os.RemoveAll(dir)
 			if err != nil {
+				errChan <- err
 				log.Fatal(err)
 			}
+			errChan <- nil
 		}(l, dir, key)
 	}
-
 	for i := 0; i < cap(sem); i++ {
 		sem <- true
+		err := <- errChan
+		if err != nil {
+			close(sem)
+			log.Fatal(err)
+		}
 	}
 	close(sem)
 
