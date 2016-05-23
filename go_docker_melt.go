@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/brauner/go-docker-melt/tarutils"
 	"io"
 	"io/ioutil"
 	"log"
@@ -15,7 +17,6 @@ import (
 	"regexp"
 	"runtime"
 	"sync"
-	"github.com/brauner/go-docker-melt/tarutils"
 )
 
 type genericConfig struct {
@@ -50,7 +51,6 @@ type History struct {
 type Rootfs struct {
 	Type    string   `json:"type,omitempty"`
 	DiffIds []string `json:"diff_ids,omitempty"`
-	rawJSON []byte
 }
 
 func (rfs *Rootfs) delRootfsElem(pos int) {
@@ -58,15 +58,17 @@ func (rfs *Rootfs) delRootfsElem(pos int) {
 }
 
 type ImageConfig struct {
-	Arch            string         `json:"architecture,omitempty"`
-	Config          *genericConfig `json:"config,omitempty"`
-	Container       string         `json:"container,omitempty"`
-	ContainerConfig *genericConfig `json:"container_config,omitempty"`
-	Created         string         `json:"created,omitempty"`
-	DockerVersion   string         `json:"docker_version,omitempty"`
-	History         []History      `json:"history,omitempty"`
-	OS              string         `json:"os,omitempty"`
-	Rootfs          *Rootfs        `json:"rootfs,omitempty"`
+	Arch            string           `json:"architecture,omitempty"`
+	Config          *genericConfig   `json:"config,omitempty"`
+	Container       string           `json:"container,omitempty"`
+	ContainerConfig *genericConfig   `json:"container_config,omitempty"`
+	Created         string           `json:"created,omitempty"`
+	DockerVersion   string           `json:"docker_version,omitempty"`
+	RawHistory      *json.RawMessage `json:"history,omitempty"`
+	history         []History
+	OS              string           `json:"os,omitempty"`
+	RawRootfs       *json.RawMessage `json:"rootfs,omitempty"`
+	rootfs          *Rootfs
 	rawJSON         []byte
 }
 
@@ -98,41 +100,48 @@ func (img *ImageConfig) UnmarshalJSON(file string) error {
 		return err
 	}
 	img.rawJSON = buf
+
+	if img.RawHistory == nil || img.RawRootfs == nil {
+		return errors.New("Corrupt image configuration.")
+	}
+
+	err = json.Unmarshal(*img.RawHistory, &img.history)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(*img.RawRootfs, &img.rootfs)
+	if err != nil {
+		return err
+	}
+
+	if img.rootfs == nil {
+		return errors.New("Corrupt image configuration.")
+	}
+
 	return nil
 }
 
-func (img *ImageConfig) updateHistory(oldHist []byte) error {
-	repl, err := json.Marshal(img.History)
+func (img *ImageConfig) updateHistory() error {
+	repl, err := json.Marshal(img.history)
 	if err != nil {
 		return err
 	}
-	img.rawJSON = bytes.Replace(img.rawJSON, oldHist, repl, 1)
+	img.rawJSON = bytes.Replace(img.rawJSON, *img.RawHistory, repl, 1)
 	return nil
 }
 
-func (img *ImageConfig) updateRootfs(oldRootfs []byte) error {
-	repl, err := json.Marshal(img.Rootfs)
+func (img *ImageConfig) updateRootfs() error {
+	repl, err := json.Marshal(img.rootfs)
 	if err != nil {
 		return err
 	}
-	img.rawJSON = bytes.Replace(img.rawJSON, oldRootfs, repl, 1)
-	return nil
-}
-
-func (img *ImageConfig) updateRawJSON(oldHist []byte, oldRootfs []byte) error {
-	err := img.updateHistory(oldHist)
-	if err != nil {
-		return err
-	}
-	err = img.updateRootfs(oldRootfs)
-	if err != nil {
-		return err
-	}
+	img.rawJSON = bytes.Replace(img.rawJSON, *img.RawRootfs, repl, 1)
 	return nil
 }
 
 func (img *ImageConfig) delHistoryElem(pos int) {
-	img.History = append(img.History[:pos], img.History[pos+1:]...)
+	img.history = append(img.history[:pos], img.history[pos+1:]...)
 }
 
 // The reference for manifests can be found at:
@@ -143,12 +152,13 @@ type Manifest struct {
 	ConfigHash string `json:"Config,omitempty"`
 	config     *ImageConfig
 	RepoTags   []string `json:"RepoTags,omitempty"`
-	Layers     []string `json:"Layers,omitempty"`
+	layers     []string
+	RawLayers  *json.RawMessage `json:"Layers,omitempty"`
 	Parent     string
 }
 
 func (m *Manifest) delLayerElem(pos int) {
-	m.Layers = append(m.Layers[:pos], m.Layers[pos+1:]...)
+	m.layers = append(m.layers[:pos], m.layers[pos+1:]...)
 }
 
 type RawManifest struct {
@@ -156,12 +166,12 @@ type RawManifest struct {
 	rawJSON  []byte // holds raw manifest.json file
 }
 
-func (r *RawManifest) updateLayers(manifest Manifest, oldLayers []byte) error {
-	repl, err := json.Marshal(manifest.Layers)
+func (r *RawManifest) updateLayers(manifest Manifest) error {
+	repl, err := json.Marshal(manifest.layers)
 	if err != nil {
 		return err
 	}
-	r.rawJSON = bytes.Replace(r.rawJSON, oldLayers, repl, 1)
+	r.rawJSON = bytes.Replace(r.rawJSON, *manifest.RawLayers, repl, 1)
 	return nil
 }
 
@@ -191,6 +201,17 @@ func (r *RawManifest) UnmarshalJSON(file string) error {
 	err = json.Unmarshal(buf, &r.Manifest)
 	if err != nil {
 		return err
+	}
+
+	for i := 0; i < len(r.Manifest); i++ {
+		manfst := &r.Manifest[i]
+		if manfst.RawLayers == nil {
+			return errors.New("Corrupt manifest file.")
+		}
+		err = json.Unmarshal(*manfst.RawLayers, &manfst.layers)
+		if err != nil {
+			return err
+		}
 	}
 	r.rawJSON = buf
 	return nil
@@ -333,7 +354,7 @@ func main() {
 	var numLayers int
 	var configs = make([]ImageConfig, numManifest, numManifest)
 	for i, val := range manifest.Manifest {
-		numLayers += len(val.Layers)
+		numLayers += len(val.layers)
 		conf := val.ConfigHash
 		if conf == "" {
 			continue
@@ -362,7 +383,7 @@ func main() {
 	// layer is unique.
 	allLayers := make(map[string]int, numLayers)
 	for _, val := range manifest.Manifest {
-		for _, lay := range val.Layers {
+		for _, lay := range val.layers {
 			if ret, ok := allLayers[lay]; !ok {
 				allLayers[lay] = 0 // unique layer
 			} else if ret == 0 { // only set it when it isn't already set
@@ -390,9 +411,9 @@ func main() {
 		// unique layer "cur" we cannot melt "cur" into "prev". To
 		// indicate this we assign the value 2.
 		for _, val := range manifest.Manifest {
-			for i := 1; i < len(val.Layers); i++ {
-				cur = val.Layers[i]
-				prev = val.Layers[i-1]
+			for i := 1; i < len(val.layers); i++ {
+				cur = val.layers[i]
+				prev = val.layers[i-1]
 				if (allLayers[cur] == 0) && (allLayers[prev] == 1) {
 					allLayers[prev]++
 				}
@@ -457,27 +478,8 @@ func main() {
 		}
 
 		rootLayer = ""
-		oldHist, err := json.Marshal(manfst.config.History)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if manfst.config.Rootfs == nil {
-			log.Fatalln("Corrupt image configuration file.")
-		}
-		oldRootfs, err := json.Marshal(manfst.config.Rootfs)
-		if err != nil {
-			log.Fatal(err)
-		}
-		manfst.config.Rootfs.rawJSON = oldRootfs
-
-		oldLayers, err := json.Marshal(manfst.Layers)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		for j := 0; j < len(manfst.Layers); j++ {
-			layer := &manfst.Layers[j]
+		for j := 0; j < len(manfst.layers); j++ {
+			layer := &manfst.layers[j]
 			// Find the first useable rootLayer for this image.
 			if rootLayer == "" && allLayers[*layer] != 2 {
 				rootLayer = (*layer)[:len(*layer)- /* .tar */ 4]
@@ -523,17 +525,17 @@ func main() {
 			// Delete corresponding history entry for this layer.
 			manfst.config.delHistoryElem(j)
 			// Delete corresponding diff_ids entry for this layer.
-			manfst.config.Rootfs.delRootfsElem(j)
+			manfst.config.rootfs.delRootfsElem(j)
 			// Delete corresponding layer entry.
 			manfst.delLayerElem(j)
 			j--
 		}
-		err = manfst.config.updateHistory(oldHist)
+		err = manfst.config.updateHistory()
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		err = manifest.updateLayers(*manfst, oldLayers)
+		err = manifest.updateLayers(*manfst)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -565,7 +567,7 @@ func main() {
 		dir := filepath.Join(tmpDir, key[:len(key)- /* .tar */ 4])
 		sem <- true
 		go func(l string, dir string, key string) {
-			defer func() { <- sem }()
+			defer func() { <-sem }()
 			checksum, err := tarutils.CreateTarHash(l, dir, dir)
 			if err != nil {
 				errChan <- err
@@ -584,7 +586,7 @@ func main() {
 	}
 	for i := 0; i < cap(sem); i++ {
 		sem <- true
-		err := <- errChan
+		err := <-errChan
 		if err != nil {
 			close(sem)
 			log.Fatal(err)
@@ -594,19 +596,15 @@ func main() {
 
 	for i := 0; i < len(manifest.Manifest); i++ {
 		m := &manifest.Manifest[i]
-		for j := 0; j < len(m.Layers); j++ {
-			l := &m.Layers[j]
-			m.config.Rootfs.DiffIds[j] = diffIDMutex.diffID[*l]
+		for j := 0; j < len(m.layers); j++ {
+			l := &m.layers[j]
+			m.config.rootfs.DiffIds[j] = diffIDMutex.diffID[*l]
 		}
-		err = m.config.updateRootfs(m.config.Rootfs.rawJSON)
+		err = m.config.updateRootfs()
 		if err != nil {
 			log.Fatal(err)
 		}
-		marshConfig, err := json.Marshal(m.config)
-		if err != nil {
-			log.Fatal(err)
-		}
-		err = ioutil.WriteFile(filepath.Join(tmpDir, m.ConfigHash), marshConfig, 0666)
+		err = ioutil.WriteFile(filepath.Join(tmpDir, m.ConfigHash), m.config.rawJSON, 0666)
 		if err != nil {
 			log.Fatal(err)
 		}
