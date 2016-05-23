@@ -571,14 +571,14 @@ func main() {
 			defer func() { <-sem }()
 			checksum, err := tarutils.CreateTarHash(l, dir, dir)
 			if err != nil {
-				log.Fatal(err)
+				log.Println(err)
 			}
 			diffIDMutex.Lock()
 			diffIDMutex.diffID[key] = "sha256:" + hex.EncodeToString(checksum)
 			diffIDMutex.Unlock()
 			err = os.RemoveAll(dir)
 			if err != nil {
-				log.Fatal(err)
+				log.Println(err)
 			}
 		}(l, dir, key)
 	}
