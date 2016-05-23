@@ -253,20 +253,9 @@ func rsyncLayer(from string, to string) *exec.Cmd {
 	return cmd
 }
 
-func isWhiteout(name string) (bool, error) {
-	regex, err := regexp.Compile(`^\.wh\.[[:alnum:]]+`)
-	if err != nil {
-		return false, err
-	}
-	if regex.MatchString(name) {
-		return true, nil
-	}
-	return false, nil
-}
-
 // This implements a barebone recursive readdir() since the filepath.Walk()
 // function causes unnecessary overhead due to it sorting the directory entries.
-func removeWhiteouts(oldpath string, newpath string, nentries int) error {
+func removeWhiteouts(oldpath string, newpath string, nentries int, isWhiteout *regexp.Regexp) error {
 	f, err := os.Open(oldpath)
 	if err != nil {
 		return err
@@ -281,13 +270,9 @@ func removeWhiteouts(oldpath string, newpath string, nentries int) error {
 			curTmp := filepath.Join(oldpath, cur)
 			newTmp := filepath.Join(newpath, cur)
 			if n.IsDir() {
-				removeWhiteouts(curTmp, newTmp, nentries)
+				removeWhiteouts(curTmp, newTmp, nentries, isWhiteout)
 			} else {
-				wh, err := isWhiteout(cur)
-				if err != nil {
-					return err
-				}
-				if wh {
+				if isWhiteout.MatchString(cur) {
 					if err := os.RemoveAll(filepath.Join(newpath, cur[ /* .wh. */ 4:])); err != nil {
 						return err
 					}
@@ -473,6 +458,12 @@ func main() {
 
 	// sync + delete witheouts
 	var rootLayer string
+
+	isWhiteout, err := regexp.Compile(`^\.wh\.[[:alnum:]]+`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	for i := 0; i < len(manifest.Manifest); i++ {
 		manfst := &manifest.Manifest[i]
 		if manfst.config == nil {
@@ -507,7 +498,7 @@ func main() {
 				// Delete whiteout files in the current layer
 				// and the corresponding file/dir in the
 				// rootLayer.
-				err = removeWhiteouts(meltFrom, meltInto, 20)
+				err = removeWhiteouts(meltFrom, meltInto, 20, isWhiteout)
 				if err != io.EOF {
 					log.Fatal(err)
 				}
