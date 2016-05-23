@@ -338,6 +338,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// TODO: Should be replaced by a go-only implementation (cf. the functions for
+	// tar archive creation in the Tar interface in tarutils/tarutils.go).
 	untar := untarCmd(image, tmpDir)
 	err = untar.Run()
 	if err != nil {
