@@ -549,7 +549,11 @@ func main() {
 		sync.Mutex
 		diffID map[string]string
 	}{diffID: make(map[string]string, len(allLayers))}
+	var sawError bool
+
 	sem := make(chan bool, maxWorkers)
+	errc := make(chan error, maxWorkers)
+
 	for key := range allLayers {
 		l := filepath.Join(tmpDir, key)
 		_, err = os.Stat(l)
@@ -563,27 +567,55 @@ func main() {
 		}
 
 		dir := filepath.Join(tmpDir, key[:len(key)- /* .tar */ 4])
+
 		sem <- true
 		go func(l string, dir string, key string) {
 			defer func() { <-sem }()
 			checksum, err := tarutils.CreateTarHash(l, dir, dir)
 			if err != nil {
-				log.Println(err)
+				errc <- err
+				return
 			}
 			diffIDMutex.Lock()
 			diffIDMutex.diffID[key] = "sha256:" + hex.EncodeToString(checksum)
 			diffIDMutex.Unlock()
 			err = os.RemoveAll(dir)
 			if err != nil {
-				log.Println(err)
+				errc <- err
+				return
 			}
+			errc <- nil
 		}(l, dir, key)
+
+		select {
+		case err := <-errc:
+			if err != nil {
+				log.Println(errc)
+				sawError = true
+				break
+			}
+		default:
+		}
 	}
 
 	for i := 0; i < cap(sem); i++ {
 		sem <- true
+		select {
+		case err := <-errc:
+			if err != nil {
+				if !sawError {
+					sawError = true
+				}
+				log.Println(errc)
+			}
+		default:
+		}
 	}
 	close(sem)
+	close(errc)
+	if sawError {
+		os.Exit(1)
+	}
 
 	for i := 0; i < len(manifest.Manifest); i++ {
 		m := &manifest.Manifest[i]
