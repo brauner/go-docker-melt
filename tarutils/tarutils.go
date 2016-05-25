@@ -205,12 +205,16 @@ func ExtractTar(tarball string, path string) error {
 			break
 		}
 
-		if header.Typeflag&tar.TypeDir == tar.TypeDir {
+		if header.Typeflag == tar.TypeDir {
 			if err := ExtractDir(path, header); err != nil {
 				return err
 			}
-		} else if header.Typeflag&tar.TypeSymlink == tar.TypeSymlink {
+		} else if header.Typeflag == tar.TypeSymlink {
 			if err := ExtractSymlink(path, header); err != nil {
+				return err
+			}
+		} else if header.Typeflag == tar.TypeChar || header.Typeflag == tar.TypeBlock {
+			if err := ExtractDev(path, header); err != nil {
 				return err
 			}
 		} else {
@@ -271,7 +275,6 @@ func ExtractReg(path string, header *tar.Header, r *tar.Reader) (err error) {
 	if w != fi.Size() {
 		return fmt.Errorf("Expected to write %d bytes, only wrote %d\n", fi.Size(), w)
 	}
-
 	if w != header.Size {
 		return
 	}
@@ -293,6 +296,7 @@ func ExtractReg(path string, header *tar.Header, r *tar.Reader) (err error) {
 	if err = os.Chtimes(entry, fi.ModTime(), fi.ModTime()); err != nil {
 		return err
 	}
+
 	return
 }
 
@@ -309,8 +313,45 @@ func ExtractSymlink(path string, header *tar.Header) (err error) {
 	if err = os.Symlink(header.Linkname, entry); err != nil {
 		return
 	}
+
 	if err = os.Lchown(entry, header.Uid, header.Gid); err != nil {
 		return
 	}
+
+	// TODO: use syscall.SYS_UTIMENSAT
+	// if err = os.Chtimes(entry, fi.ModTime(), fi.ModTime()); err != nil {
+	// 	return err
+	// }
+
+	return
+}
+
+func ExtractDev(path string, header *tar.Header) (err error) {
+	fi := header.FileInfo()
+	entry := filepath.Join(path, header.Name)
+	filedir := filepath.Join(path, filepath.Dir(header.Name))
+
+	err = os.MkdirAll(filedir, fi.Mode())
+	if err != nil {
+		return
+	}
+
+	g, err := os.OpenFile(entry, os.O_EXCL|os.O_WRONLY|os.O_CREATE, fi.Mode())
+	if err != nil {
+		return
+	}
+
+	if err = g.Close(); err != nil {
+		return
+	}
+
+	if err = os.Chown(entry, header.Uid, header.Gid); err != nil {
+		return
+	}
+
+	if err = os.Chtimes(entry, fi.ModTime(), fi.ModTime()); err != nil {
+		return err
+	}
+
 	return
 }
