@@ -232,18 +232,6 @@ type LayerJSON struct {
 	rawJSON         []byte
 }
 
-// TODO: Should be replaced by a go-only implementation (cf. the functions for
-// tar archive creation in the Tar interface in tarutils/tarutils.go).
-func untarCmd(from string, to string) *exec.Cmd {
-	cmd := exec.Command("tar", "--acls", "--xattrs", "--xattrs-include=*",
-		"--same-owner", "--numeric-owner",
-		"--preserve-permissions", "--atime-preserve=system",
-		"-S", "-xf", from, "-C", to)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd
-}
-
 func rsyncLayer(from string, to string) *exec.Cmd {
 	fromexcl := from + "/./"
 	cmd := exec.Command("rsync", "-aXhsrpR", "--numeric-ids",
@@ -325,8 +313,7 @@ func main() {
 
 	// TODO: Should be replaced by a go-only implementation (cf. the functions for
 	// tar archive creation in the Tar interface in tarutils/tarutils.go).
-	untar := untarCmd(image, tmpDir)
-	err = untar.Run()
+	err = tarutils.ExtractTar(image, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -408,22 +395,10 @@ func main() {
 		}
 	}
 
-	// The untaring can be parallelized.
-	var wg sync.WaitGroup
 	maxWorkers := runtime.NumCPU()
-	tasks := make(chan *exec.Cmd, numLayers)
-	for i := 0; i < maxWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			for cmd := range tasks {
-				err = cmd.Run()
-				if err != nil {
-					log.Println(err)
-				}
-			}
-			wg.Done()
-		}()
-	}
+	var sawError bool
+	sem := make(chan bool, maxWorkers)
+	errc := make(chan error, maxWorkers)
 
 	for key := range allLayers {
 		// We need to record the pure layerHash somewhere to avoid
@@ -451,10 +426,40 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		tasks <- untarCmd(filepath.Join(tmpDir, key), filepath.Join(tmpDir, tmptar))
+		sem <- true
+		go func(tmpDir string, key string, tmptar string) {
+			defer func() { <-sem }()
+			errc <- tarutils.ExtractTar(filepath.Join(tmpDir, key), filepath.Join(tmpDir, tmptar))
+		}(tmpDir, key, tmptar)
+		select {
+		case err := <-errc:
+			if err != nil {
+				log.Println(err)
+				sawError = true
+				break
+			}
+		default:
+		}
 	}
-	close(tasks)
-	wg.Wait()
+
+	for i := 0; i < cap(sem); i++ {
+		sem <- true
+		select {
+		case err := <-errc:
+			if err != nil {
+				if !sawError {
+					sawError = true
+				}
+				log.Println(err)
+			}
+		default:
+		}
+	}
+	close(sem)
+	close(errc)
+	if sawError {
+		os.Exit(1)
+	}
 
 	// sync + delete witheouts
 	var rootLayer string
@@ -549,10 +554,9 @@ func main() {
 		sync.Mutex
 		diffID map[string]string
 	}{diffID: make(map[string]string, len(allLayers))}
-	var sawError bool
 
-	sem := make(chan bool, maxWorkers)
-	errc := make(chan error, maxWorkers)
+	sem = make(chan bool, maxWorkers)
+	errc = make(chan error, maxWorkers)
 
 	for key := range allLayers {
 		l := filepath.Join(tmpDir, key)
@@ -590,7 +594,7 @@ func main() {
 		select {
 		case err := <-errc:
 			if err != nil {
-				log.Println(errc)
+				log.Println(err)
 				sawError = true
 				break
 			}
@@ -606,7 +610,7 @@ func main() {
 				if !sawError {
 					sawError = true
 				}
-				log.Println(errc)
+				log.Println(err)
 			}
 		default:
 		}
