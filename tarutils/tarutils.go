@@ -4,9 +4,12 @@ import (
 	"archive/tar"
 	"crypto/sha256"
 	"io"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 type Tar interface {
@@ -26,7 +29,17 @@ type Tar interface {
 	// symbolic links and device files correctly.
 	WriteTarHeader(w *tar.Writer, path string, headerName string, f os.FileInfo) error
 
-	// TODO: Add functions to extract tar archives.
+	// Extract tar archive.
+	ExtractTar(tarball string, path string) error
+
+	// Extract a directory from a tar archive.
+	ExtractDir(path string, header *tar.Header) (err error)
+
+	// Extract regular file from a tar archive.
+	ExtractReg(path string, header *tar.Header, r *tar.Reader) (err error)
+
+	// Extract symlink file from a tar archive.
+	ExtractSymlink(path string, header *tar.Header) (err error)
 
 	// Test whether a tar archive is empty.
 	IsEmptyTar(tar string) (bool, error)
@@ -172,5 +185,132 @@ func TarHeaderEntry(f os.FileInfo, path string, prefix string) (entry string) {
 		entry = entry + "/"
 	}
 
+	return
+}
+
+func ExtractTar(tarball string, path string) error {
+	f, err := os.Open(tarball)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	r := tar.NewReader(f)
+	if err != nil {
+		return err
+	}
+
+	for header, err := r.Next(); err != io.EOF; header, err = r.Next() {
+		if err != nil {
+			break
+		}
+
+		if header.Typeflag&tar.TypeDir == tar.TypeDir {
+			if err := ExtractDir(path, header); err != nil {
+				return err
+			}
+		} else if header.Typeflag&tar.TypeSymlink == tar.TypeSymlink {
+			if err := ExtractSymlink(path, header); err != nil {
+				return err
+			}
+		} else {
+			if err := ExtractReg(path, header, r); err != nil {
+				return err
+			}
+		}
+	}
+
+	return err
+}
+
+func ExtractDir(path string, header *tar.Header) (err error) {
+	entry := filepath.Join(path, header.Name)
+	fi := header.FileInfo()
+
+	err = os.MkdirAll(entry, fi.Mode())
+	if err != nil {
+		return
+	}
+
+	if err = os.Chown(entry, header.Uid, header.Gid); err != nil {
+		return
+	}
+
+	for attr, data := range header.Xattrs {
+		if err = syscall.Setxattr(entry, attr, []byte(data), 0); err != nil {
+			return
+		}
+	}
+
+	if err = os.Chtimes(entry, time.Now(), fi.ModTime()); err != nil {
+		return
+	}
+
+	return
+}
+
+func ExtractReg(path string, header *tar.Header, r *tar.Reader) (err error) {
+	fi := header.FileInfo()
+	entry := filepath.Join(path, header.Name)
+	filedir := filepath.Join(path, filepath.Dir(header.Name))
+
+	err = os.MkdirAll(filedir, fi.Mode())
+	if err != nil {
+		return
+	}
+
+	g, err := os.OpenFile(entry, os.O_EXCL|os.O_WRONLY|os.O_CREATE, fi.Mode())
+	if err != nil {
+		return
+	}
+
+	w, err := io.Copy(g, r)
+	if err != nil {
+		return
+	}
+	if w != fi.Size() {
+		return fmt.Errorf("Expected to write %d bytes, only wrote %d\n", fi.Size(), w)
+	}
+
+	if w != header.Size {
+		return
+	}
+
+	if err = g.Close(); err != nil {
+		return
+	}
+
+	if err := os.Chown(entry, header.Uid, header.Gid); err != nil {
+		return err
+	}
+
+	for attr, data := range header.Xattrs {
+		if err = syscall.Setxattr(entry, attr, []byte(data), 0); err != nil {
+			return err
+		}
+	}
+
+	if err = os.Chtimes(entry, fi.ModTime(), fi.ModTime()); err != nil {
+		return err
+	}
+	return
+}
+
+func ExtractSymlink(path string, header *tar.Header) (err error) {
+	fi := header.FileInfo()
+	entry := filepath.Join(path, header.Name)
+	filedir := filepath.Join(path, filepath.Dir(header.Name))
+
+	err = os.MkdirAll(filedir, fi.Mode())
+	if err != nil {
+		return
+	}
+
+	if err = os.Symlink(header.Linkname, entry); err != nil {
+		return
+	}
+	if err = os.Lchown(entry, header.Uid, header.Gid); err != nil {
+		return
+	}
 	return
 }
