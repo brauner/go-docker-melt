@@ -318,7 +318,6 @@ func ExtractSymlink(path string, header *tar.Header) (err error) {
 		return
 	}
 
-	// TODO: use syscall.SYS_UTIMENSAT
 	var times = make([]unix.Timespec, 2)
 	times[0].Sec = time.Now().Unix()
 	times[1].Sec = fi.ModTime().Unix()
