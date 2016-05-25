@@ -3,12 +3,12 @@ package tarutils
 import (
 	"archive/tar"
 	"crypto/sha256"
-	"io"
 	"fmt"
+	"golang.org/x/sys/unix"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -241,7 +241,7 @@ func ExtractDir(path string, header *tar.Header) (err error) {
 	}
 
 	for attr, data := range header.Xattrs {
-		if err = syscall.Setxattr(entry, attr, []byte(data), 0); err != nil {
+		if err = unix.Setxattr(entry, attr, []byte(data), 0); err != nil {
 			return
 		}
 	}
@@ -288,7 +288,7 @@ func ExtractReg(path string, header *tar.Header, r *tar.Reader) (err error) {
 	}
 
 	for attr, data := range header.Xattrs {
-		if err = syscall.Setxattr(entry, attr, []byte(data), 0); err != nil {
+		if err = unix.Setxattr(entry, attr, []byte(data), 0); err != nil {
 			return err
 		}
 	}
@@ -319,9 +319,13 @@ func ExtractSymlink(path string, header *tar.Header) (err error) {
 	}
 
 	// TODO: use syscall.SYS_UTIMENSAT
-	// if err = os.Chtimes(entry, fi.ModTime(), fi.ModTime()); err != nil {
-	// 	return err
-	// }
+	var times = make([]unix.Timespec, 2)
+	times[0].Sec = time.Now().Unix()
+	times[1].Sec = fi.ModTime().Unix()
+	err = unix.UtimesNanoAt(unix.AT_FDCWD, entry, times, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
 
 	return
 }
