@@ -311,8 +311,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// TODO: Should be replaced by a go-only implementation (cf. the functions for
-	// tar archive creation in the Tar interface in tarutils/tarutils.go).
 	err = tarutils.ExtractTar(image, tmpDir)
 	if err != nil {
 		log.Fatal(err)
