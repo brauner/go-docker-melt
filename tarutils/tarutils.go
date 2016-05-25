@@ -47,6 +47,9 @@ type Tar interface {
 	// Takes care to return a correct entry for the Name field in a tar
 	// header struct.
 	TarHeaderEntry(f os.FileInfo, path string, prefix string) (entry string)
+
+	// Receive all extended attributes associated with a file or directory.
+	GetAllXattr(path string) (map[string]string, error)
 }
 
 func IsEmptyTar(tarball string) (bool, error) {
@@ -122,6 +125,13 @@ func WriteTarHeader(w *tar.Writer, path string, headerName string, f os.FileInfo
 	}
 
 	header.Name = headerName
+
+	if header.Typeflag != tar.TypeSymlink {
+		header.Xattrs, err = GetAllXattr(path)
+		if err != nil {
+			return
+		}
+	}
 
 	return w.WriteHeader(header)
 }
@@ -357,4 +367,59 @@ func ExtractDev(path string, header *tar.Header) (err error) {
 	}
 
 	return
+}
+
+func GetAllXattr(path string) (map[string]string, error) {
+	sz, err := unix.Listxattr(path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if sz < 0 {
+		return nil, err
+	}
+	if sz == 0 {
+		return nil, nil
+	}
+
+	dest := make([]byte, sz)
+	sz, err = unix.Listxattr(path, dest)
+	if err != nil {
+		return nil, err
+	}
+	split := strings.Split(string(dest), "\x00")
+	if split == nil {
+		return nil, err
+	}
+
+	// Should probably be len(split) - 1 since we get an empty entry because
+	// we split right after the end of the last valid C string. This will
+	// give us an empty string as the last entry.
+	var xattrs = make(map[string]string, len(split))
+
+	for _, x := range split {
+		// See prior comment.
+		if x == "" {
+			continue
+		}
+		xattr := string(x)
+		sz, err = unix.Getxattr(path, xattr, nil)
+		if err != nil {
+			return nil, err
+		}
+		if sz < 0 {
+			return nil, err
+		}
+		if sz == 0 {
+			return nil, nil
+		}
+
+		val := make([]byte, sz)
+		_, err = unix.Getxattr(path, xattr, val)
+		if err != nil {
+			return nil, err
+		}
+		xattrs[xattr] = string(val)
+	}
+
+	return xattrs, nil
 }
