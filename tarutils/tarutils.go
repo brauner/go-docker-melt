@@ -374,7 +374,7 @@ func ExtractDev(path string, header *tar.Header) (err error) {
 // handle symbolic links (should it in the future be possible to set extended
 // attributed on symlinks): If path is a symbolic the extended attributes
 // associated with the link itself are retrieved.
-func Llistxattr(path string, list []byte) (sz int, err error) {
+func llistxattr(path string, list []byte) (sz int, err error) {
 	var _p0 *byte
 	_p0, err = unix.BytePtrFromString(path)
 	if err != nil {
@@ -395,7 +395,7 @@ func Llistxattr(path string, list []byte) (sz int, err error) {
 }
 
 func GetAllXattr(path string) (map[string]string, error) {
-	sz, err := Llistxattr(path, nil)
+	sz, err := llistxattr(path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,7 @@ func GetAllXattr(path string) (map[string]string, error) {
 	}
 
 	dest := make([]byte, sz)
-	sz, err = Llistxattr(path, dest)
+	sz, err = llistxattr(path, dest)
 	if err != nil {
 		return nil, err
 	}
