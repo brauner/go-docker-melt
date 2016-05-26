@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 )
 
 type Tar interface {
@@ -369,8 +370,32 @@ func ExtractDev(path string, header *tar.Header) (err error) {
 	return
 }
 
+// This uses ssize_t llistxattr(const char *path, char *list, size_t size); to
+// handle symbolic links (should it in the future be possible to set extended
+// attributed on symlinks): If path is a symbolic the extended attributes
+// associated with the link itself are retrieved.
+func Llistxattr(path string, list []byte) (sz int, err error) {
+	var _p0 *byte
+	_p0, err = unix.BytePtrFromString(path)
+	if err != nil {
+		return
+	}
+	var _p1 unsafe.Pointer
+	if len(list) > 0 {
+		_p1 = unsafe.Pointer(&list[0])
+	} else {
+		_p1 = unsafe.Pointer(nil)
+	}
+	r0, _, e1 := unix.Syscall(unix.SYS_LLISTXATTR, uintptr(unsafe.Pointer(_p0)), uintptr(_p1), uintptr(len(list)))
+	sz = int(r0)
+	if e1 != 0 {
+		err = e1
+	}
+	return
+}
+
 func GetAllXattr(path string) (map[string]string, error) {
-	sz, err := unix.Listxattr(path, nil)
+	sz, err := Llistxattr(path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +407,7 @@ func GetAllXattr(path string) (map[string]string, error) {
 	}
 
 	dest := make([]byte, sz)
-	sz, err = unix.Listxattr(path, dest)
+	sz, err = Llistxattr(path, dest)
 	if err != nil {
 		return nil, err
 	}
@@ -390,17 +415,18 @@ func GetAllXattr(path string) (map[string]string, error) {
 	if split == nil {
 		return nil, err
 	}
+	// *listxattr functions return a list of  names  as  an unordered array
+	// of null-terminated character strings (attribute names are separated
+	// by null bytes ('\0')), like this: user.name1\0system.name1\0user.name2\0
+	// Since we split at the '\0'-byte the last element of the slice will be
+	// the empty string. We remove it:
+	if split[len(split)-1] == "" {
+		split = split[:len(split)-1]
+	}
 
-	// Should probably be len(split) - 1 since we get an empty entry because
-	// we split right after the end of the last valid C string. This will
-	// give us an empty string as the last entry.
 	var xattrs = make(map[string]string, len(split))
 
 	for _, x := range split {
-		// See prior comment.
-		if x == "" {
-			continue
-		}
 		xattr := string(x)
 		sz, err = unix.Getxattr(path, xattr, nil)
 		if err != nil {
