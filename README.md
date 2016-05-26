@@ -1,5 +1,3 @@
-**Currently in a rough working state. If I find the time I might improve it.**
-
 `go-docker-melt` is a simple tool to merge layers of Docker images. It takes
 a tar file produced by `docker save` as input and produces a tar file that can
 be imported with `docker load`.
