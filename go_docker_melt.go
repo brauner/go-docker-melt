@@ -7,7 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/brauner/go-docker-melt/tarutils"
+	"github.com/brauner/tarski"
 	"io"
 	"io/ioutil"
 	"log"
@@ -311,7 +311,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = tarutils.ExtractTar(image, tmpDir)
+	err = tarski.Extract(image, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func main() {
 		sem <- true
 		go func(tmpDir string, key string, tmptar string) {
 			defer func() { <-sem }()
-			errc <- tarutils.ExtractTar(filepath.Join(tmpDir, key), filepath.Join(tmpDir, tmptar))
+			errc <- tarski.Extract(filepath.Join(tmpDir, key), filepath.Join(tmpDir, tmptar))
 		}(tmpDir, key, tmptar)
 		select {
 		case err := <-errc:
@@ -573,7 +573,7 @@ func main() {
 		sem <- true
 		go func(l string, dir string, key string) {
 			defer func() { <-sem }()
-			checksum, err := tarutils.CreateTarHash(l, dir, dir)
+			checksum, err := tarski.CreateSHA256(l, dir, dir)
 			if err != nil {
 				errc <- err
 				return
@@ -635,7 +635,7 @@ func main() {
 		}
 	}
 
-	err = tarutils.CreateTar(imageOut, tmpDir, tmpDir)
+	err = tarski.Create(imageOut, tmpDir, tmpDir)
 	if err != nil {
 		log.Fatal(err)
 	}
