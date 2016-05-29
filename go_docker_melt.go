@@ -313,12 +313,14 @@ func main() {
 
 	err = tarski.Extract(image, tmpDir)
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		log.Fatal(err)
 	}
 
 	var manifest RawManifest
 	err = manifest.UnmarshalJSON(filepath.Join(tmpDir, "manifest.json"))
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		log.Fatal(err)
 	}
 
@@ -333,6 +335,7 @@ func main() {
 		}
 		err = configs[i].UnmarshalJSON(filepath.Join(tmpDir, conf))
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 		manifest.Manifest[i].config = &configs[i]
@@ -342,6 +345,7 @@ func main() {
 	if numLayers <= 1 {
 		fmt.Errorf("%s\n", "Image does only have one layer.")
 		fmt.Errorf("%s\n", "There is nothing to be done.")
+		os.RemoveAll(tmpDir)
 		os.Exit(0)
 	}
 
@@ -376,6 +380,7 @@ func main() {
 		if uniqueLayers == 0 {
 			fmt.Errorf("%s\n", "All layers are shared among images.")
 			fmt.Errorf("%s\n", "There is nothing to be done.")
+			os.RemoveAll(tmpDir)
 			os.Exit(0)
 		}
 		var cur, prev string
@@ -404,6 +409,7 @@ func main() {
 		layerHash := key[:len(key)- /* /layer.tar */ 10]
 		direntries, err := ioutil.ReadDir(filepath.Join(tmpDir, layerHash))
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			os.Exit(1)
 		}
 		// There usually are only a few (<=3) entries per directory so
@@ -422,6 +428,7 @@ func main() {
 		tmptar := key[:len(key)- /* .tar */ 4]
 		err = os.Mkdir(filepath.Join(tmpDir, tmptar), 0755)
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 		sem <- true
@@ -456,6 +463,7 @@ func main() {
 	close(sem)
 	close(errc)
 	if sawError {
+		os.RemoveAll(tmpDir)
 		os.Exit(1)
 	}
 
@@ -464,12 +472,14 @@ func main() {
 
 	isWhiteout, err := regexp.Compile(`^\.wh\.[[:alnum:]]+`)
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		log.Fatal(err)
 	}
 
 	for i := 0; i < len(manifest.Manifest); i++ {
 		manfst := &manifest.Manifest[i]
 		if manfst.config == nil {
+			os.RemoveAll(tmpDir)
 			log.Fatalln("Corrupt image configuration file.")
 		}
 
@@ -496,6 +506,7 @@ func main() {
 				// log.Println(meltFrom, meltInto)
 				err = cmd.Run()
 				if err != nil {
+					os.RemoveAll(tmpDir)
 					log.Fatal(err)
 				}
 				// Delete whiteout files in the current layer
@@ -503,11 +514,13 @@ func main() {
 				// rootLayer.
 				err = removeWhiteouts(meltFrom, meltInto, 20, isWhiteout)
 				if err != io.EOF {
+					os.RemoveAll(tmpDir)
 					log.Fatal(err)
 				}
 				// Delete melted layers.
 				err := os.RemoveAll(filepath.Join(tmpDir, layerHash[:len(layerHash)- /* /layer */ 6]))
 				if err != nil {
+					os.RemoveAll(tmpDir)
 					log.Fatal(err)
 				}
 			}
@@ -534,16 +547,19 @@ func main() {
 		}
 		err = manfst.config.updateHistory()
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 
 		err = manifest.updateLayers(*manfst)
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 	}
 	err = ioutil.WriteFile(filepath.Join(tmpDir, "manifest.json"), manifest.rawJSON, 0666)
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		log.Fatal(err)
 	}
 
@@ -565,6 +581,7 @@ func main() {
 
 		err = os.Remove(l)
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 
@@ -616,6 +633,7 @@ func main() {
 	close(sem)
 	close(errc)
 	if sawError {
+		os.RemoveAll(tmpDir)
 		os.Exit(1)
 	}
 
@@ -627,16 +645,19 @@ func main() {
 		}
 		err = m.config.updateRootfs()
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 		err = ioutil.WriteFile(filepath.Join(tmpDir, m.ConfigHash), m.config.rawJSON, 0666)
 		if err != nil {
+			os.RemoveAll(tmpDir)
 			log.Fatal(err)
 		}
 	}
 
 	err = tarski.Create(imageOut, tmpDir, tmpDir)
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		log.Fatal(err)
 	}
 
